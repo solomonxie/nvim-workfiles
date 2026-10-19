@@ -1,0 +1,48 @@
+*workfiles.txt*  Work files per repo and worktree, kept out of the repo's git
+
+==============================================================================
+CONTENTS                                                  *workfiles*
+
+Notes, plans, test scripts and experiments live in
+<root>/<repo>/<worktree>/, outside the repo. A linked worktree's tmp/ is a
+symlink to its folder, git-excluded through info/exclude.
+
+==============================================================================
+OPTIONS                                                   *g:work_files_root*
+
+The root, read every time it's used: g:work_files_root, else
+$WORK_FILES_ROOT, else ~/workfiles. >
+    let g:work_files_root = '~/notes/work'
+<
+==============================================================================
+COMMANDS
+
+:WorkFiles[!]                                             *:WorkFiles*
+    Toggle the panel with this repo's work files, opened at the current
+    worktree (the one the cwd is in). With ! every repo under the root.
+
+:WorkNew [name]                                           *:WorkNew*
+    New <yyyymmdd>-<name> (.md if no extension) in this worktree's folder,
+    and open it. Asks for the name if none is given.
+
+:WorkDir                                                  *:WorkDir*
+    Make this worktree's folder and its tmp link, and print the path.
+
+:WorkGrep[!] [query]                                      *:WorkGrep*
+    fzf search this repo's work files (! every repo). Needs fzf.vim and rg.
+
+==============================================================================
+PANEL KEYS                                                *workfiles-keys*
+
+    <CR>          open the file (closes the panel) / open or close a folder
+    go            open the file, stay in the panel
+    o / <Space>   open / close a folder
+    a / A         new file / new folder in the folder under the cursor
+    r / D         rename / delete (to the Trash, needs `trash`)
+    y             copy the path
+    p             up to the parent folder
+    R             refresh
+    q             close
+    ?             show / hide help
+
+ vim:tw=78:ts=8:ft=help:norl:
