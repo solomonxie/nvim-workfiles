@@ -83,11 +83,11 @@ use one.
 Set the root (default `~/workfiles`) in your config, or with `$WORK_FILES_ROOT`:
 
 ```vim
-let g:work_files_root = '~/notes/work'
+let g:workfiles_root = '~/notes/work'
 ```
 
 ```lua
-vim.g.work_files_root = '~/notes/work'
+vim.g.workfiles_root = '~/notes/work'
 ```
 
 It's read every time, so it can be set anywhere, even after the plugin loads.

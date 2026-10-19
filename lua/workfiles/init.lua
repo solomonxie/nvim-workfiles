@@ -8,7 +8,7 @@
 --   :WorkGrep [query]   fzf search through this repo's work files (! for every repo)
 --
 -- Files live in <root>/<repo>/<worktree>/:
---   root      g:work_files_root, else $WORK_FILES_ROOT, else ~/workfiles.
+--   root      g:workfiles_root, else $WORK_FILES_ROOT, else ~/workfiles.
 --   repo      folder name of the repo's main checkout (e.g. myapp)
 --   worktree  folder name of the worktree (e.g. myapp-fix-login), 'main' in the main checkout
 -- A linked worktree's tmp/ is a symlink to its folder (made with the folder, and git-excluded through
@@ -30,7 +30,7 @@ local M = {}
 
 -- The work-files root, resolved; other plugins can use it to keep their files next to the work files.
 function M.root()
-    local r = vim.g.work_files_root or vim.env.WORK_FILES_ROOT or '~/workfiles'
+    local r = vim.g.workfiles_root or vim.env.WORK_FILES_ROOT or '~/workfiles'
     -- resolved, so it matches buffer names through symlinks (e.g. /tmp -> /private/tmp)
     return (vim.fn.resolve(vim.fn.fnamemodify(vim.fn.expand(r), ':p')):gsub('/$', ''))
 end
@@ -206,7 +206,7 @@ local HELP = {
     '  :WorkGrep[!]       fzf search the files (! every repo)',
     '',
     'Where',
-    '  <root>/<repo>/<worktree>/, root = g:work_files_root,',
+    '  <root>/<repo>/<worktree>/, root = g:workfiles_root,',
     '  else $WORK_FILES_ROOT, else ~/workfiles. A worktree\'s tmp/ links there.',
 }
 
@@ -281,6 +281,7 @@ local function build(tree, repo_info)
             add({
                 { pad }, { n.name .. '/', here and 'WorkFilesHere' or 'WorkFilesDir' },
                 { note_of(n.path, repo_info), 'WorkFilesNote' },
+                #n.kids == 0 and { '  (empty)', 'WorkFilesNote' } or { '' },
                 here and { '  ← you are here', 'WorkFilesHere' } or { '' },
             }, { path = n.path, dir = true, level = depth + 1 })
             for _, k in ipairs(n.kids) do walk(k, depth + 1) end

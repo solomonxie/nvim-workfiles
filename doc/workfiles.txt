@@ -8,11 +8,11 @@ Notes, plans, test scripts and experiments live in
 symlink to its folder, git-excluded through info/exclude.
 
 ==============================================================================
-OPTIONS                                                   *g:work_files_root*
+OPTIONS                                                   *g:workfiles_root*
 
-The root, read every time it's used: g:work_files_root, else
+The root, read every time it's used: g:workfiles_root, else
 $WORK_FILES_ROOT, else ~/workfiles. >
-    let g:work_files_root = '~/notes/work'
+    let g:workfiles_root = '~/notes/work'
 <
 ==============================================================================
 COMMANDS
