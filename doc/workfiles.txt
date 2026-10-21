@@ -4,8 +4,10 @@
 CONTENTS                                                  *workfiles*
 
 Notes, plans, test scripts and experiments live in
-<root>/<repo>/<worktree>/, outside the repo. A linked worktree's tmp/ is a
-symlink to its folder, git-excluded through info/exclude.
+<root>/<repo>/<worktree>/, outside the repo. Each checkout's tmp/ is a
+symlink to its folder, git-excluded through info/exclude. If tmp/ is taken,
+the link is tmp_workfiles in the checkout's git dir. The panel opens files
+through the link, so their buffers belong to the checkout.
 
 ==============================================================================
 OPTIONS                                                   *g:workfiles_root*
@@ -19,14 +21,8 @@ COMMANDS
 
 :WorkFiles[!]                                             *:WorkFiles*
     Toggle the panel with this repo's work files, opened at the current
-    worktree (the one the cwd is in). With ! every repo under the root.
-
-:WorkNew [name]                                           *:WorkNew*
-    New <yyyymmdd>-<name> (.md if no extension) in this worktree's folder,
-    and open it. Asks for the name if none is given.
-
-:WorkDir                                                  *:WorkDir*
-    Make this worktree's folder and its tmp link, and print the path.
+    worktree (the one the cwd is in). Makes that worktree's folder and its
+    tmp link first if they don't exist yet. With ! every repo under the root.
 
 :WorkGrep[!] [query]                                      *:WorkGrep*
     fzf search this repo's work files (! every repo). Needs fzf.vim and rg.

@@ -1,19 +1,21 @@
 -- Local work files (notes, plans, test scripts, experiments) per worktree, kept out of the repo's git.
 --
 --   :WorkFiles          toggle the panel: this repo's work files as a folded tree, opened at the current worktree
---                       (the one nvim's cwd is in, not the file you're editing)
+--                       (the one nvim's cwd is in, not the file you're editing), whose folder and tmp link
+--                       are made if they don't exist yet
 --   :WorkFiles!         same, for every repo under the root
---   :WorkNew [name]     new file <yyyymmdd>-<name> (.md if no extension) in this worktree's folder, and open it
---   :WorkDir            make this worktree's folder (and its tmp link) and print its path
 --   :WorkGrep [query]   fzf search through this repo's work files (! for every repo)
 --
 -- Files live in <root>/<repo>/<worktree>/:
 --   root      g:workfiles_root, else $WORK_FILES_ROOT, else ~/workfiles.
 --   repo      folder name of the repo's main checkout (e.g. myapp)
 --   worktree  folder name of the worktree (e.g. myapp-fix-login), 'main' in the main checkout
--- A linked worktree's tmp/ is a symlink to its folder (made with the folder, and git-excluded through
--- info/exclude), so `tmp/x.md` in any worktree is that worktree's work file. The main checkout gets no link. If tmp/ already links to
--- another folder under the root (e.g. one project folder shared by several worktrees), that one is used.
+-- Every checkout links to its folder: tmp/ (made with the folder, and git-excluded through info/exclude), so
+-- `tmp/x.md` in any worktree is that worktree's work file. If tmp/ is taken by something else, the link is
+-- tmp_workfiles in the checkout's git dir (.git/tmp_workfiles, .git/worktrees/<name>/tmp_workfiles), which git
+-- never lists. If a link already points to another folder under the root (e.g. one project folder shared by
+-- several worktrees), that one is used. The panel opens files through the link, so their buffers belong to the
+-- checkout (a file tree or git-root lookup going by the buffer's path finds the repo, not the root's).
 --
 -- In the panel:
 --   <CR>       open the file (closing the panel) / open or close a folder
@@ -49,7 +51,20 @@ end
 -- where we are
 ---------------------------------------------------------------------------
 
--- { repo, name = worktree folder name, top = checkout root, main, worktrees = { name -> path } }
+-- Git dir of a checkout: its .git folder, the one a worktree's .git file points to, else `common`
+-- (a checkout with a separate git dir, e.g. ~/dot with --git-dir=~/.dot.git).
+local function git_dir_of(top, common)
+    local st = vim.uv.fs_stat(top .. '/.git')
+    if st and st.type == 'directory' then return top .. '/.git' end
+    if st then
+        local d = (vim.fn.readfile(top .. '/.git', '', 1)[1] or ''):match('^gitdir: (.+)')
+        if d then return vim.startswith(d, '/') and d or vim.fs.normalize(top .. '/' .. d) end
+    end
+    return common
+end
+
+-- { repo, name = worktree folder name, top = checkout root, gitdir, main,
+--   worktrees = { name -> path }, gitdirs = { name -> git dir } }
 local function where(path)
     local dir = is_dir(path) and path or vim.fn.fnamemodify(path, ':h')
     local git = vim.fn.systemlist({ 'git', '-C', dir, 'rev-parse', '--show-toplevel', '--git-dir', '--git-common-dir' })
@@ -57,7 +72,10 @@ local function where(path)
         return { repo = vim.fn.fnamemodify(dir, ':t'), name = 'main', top = dir, main = true, worktrees = {}, nogit = true }
     end
     local top = git[1]
-    local abs = function(d) return (vim.fn.fnamemodify(vim.fs.joinpath(top, d), ':p'):gsub('/$', '')) end
+    local abs = function(d)
+        if not vim.startswith(d, '/') then d = vim.fs.joinpath(top, d) end
+        return (vim.fn.fnamemodify(d, ':p'):gsub('/$', ''))
+    end
     -- The main checkout is the one whose git dir is the common one. Its folder is the first worktree
     -- git lists, unless that's a bare or separate git dir (e.g. ~/dot with --git-dir=~/.dot.git),
     -- which has no checkout of its own: then it's the folder holding .git (or this checkout).
@@ -71,7 +89,7 @@ local function where(path)
     if not main then
         main_top = listed[1] ~= abs(git[3]) and listed[1] or vim.fn.fnamemodify(abs(git[3]), ':h')
     end
-    local loc = { repo = vim.fn.fnamemodify(main_top, ':t'), top = top, main = main, worktrees = {} }
+    local loc = { repo = vim.fn.fnamemodify(main_top, ':t'), top = top, gitdir = abs(git[2]), main = main, worktrees = {}, gitdirs = {} }
     loc.name = main and 'main' or vim.fn.fnamemodify(top, ':t')
     for _, wt in ipairs(listed) do
         if wt == main_top then
@@ -81,20 +99,23 @@ local function where(path)
         end
     end
     loc.worktrees.main = loc.worktrees.main or main_top
+    for name, wt in pairs(loc.worktrees) do loc.gitdirs[name] = git_dir_of(wt, abs(git[3])) end
     return loc
 end
 
--- Folder a worktree's tmp/ links to, if it's under the root.
-local function linked_dir(top)
-    local link = vim.uv.fs_readlink(top .. '/tmp')
-    if not link then return nil end
-    local target = vim.fn.resolve(top .. '/tmp')
-    if inside(target, root()) then return target end
+-- Folder a checkout links to, if it's under the root, and the link: tmp/, else tmp_workfiles in its git dir.
+local function linked_dir(top, gitdir)
+    for _, link in ipairs({ top .. '/tmp', gitdir and (gitdir .. '/tmp_workfiles') }) do
+        if vim.uv.fs_readlink(link) then
+            local target = vim.fn.resolve(link)
+            if inside(target, root()) then return target, link end
+        end
+    end
 end
 
 -- The work-files folder of a location (it may not exist yet).
 local function folder_of(loc)
-    return linked_dir(loc.top) or table.concat({ root(), loc.repo, loc.name }, '/')
+    return linked_dir(loc.top, loc.gitdir) or table.concat({ root(), loc.repo, loc.name }, '/')
 end
 
 -- Where you are: the cwd (the file you're editing may be anywhere, e.g. a work file of another repo).
@@ -112,17 +133,19 @@ local function current()
     return { repo = loc.repo, dir = folder_of(loc), loc = loc }
 end
 
--- Make the folder, and the worktree's tmp link to it, with /tmp in the repo's info/exclude.
--- Not in the main checkout, whose files are left alone.
+-- Make the folder, and the checkout's link to it: tmp/ with /tmp in the repo's info/exclude, or
+-- tmp_workfiles in its git dir if tmp/ is taken (a real folder, or a link to somewhere else).
 local function ensure(cur)
     vim.fn.mkdir(cur.dir, 'p')
     local loc = cur.loc
-    if not loc or loc.nogit or loc.main then return end
+    if not loc or loc.nogit or linked_dir(loc.top, loc.gitdir) then return end
     local tmp = loc.top .. '/tmp'
     if vim.uv.fs_lstat(tmp) then
-        if not vim.uv.fs_readlink(tmp) then
-            vim.notify('workfiles: ' .. tmp .. ' is a real folder, not linked to ' .. cur.dir, vim.log.levels.WARN)
+        local alt = loc.gitdir .. '/tmp_workfiles'
+        if vim.uv.fs_lstat(alt) then
+            return vim.notify('workfiles: ' .. alt .. ' is not a link to ' .. cur.dir, vim.log.levels.WARN)
         end
+        vim.uv.fs_symlink(cur.dir, alt)
         return
     end
     vim.uv.fs_symlink(cur.dir, tmp)
@@ -201,8 +224,6 @@ local HELP = {
     '',
     'Commands',
     '  :WorkFiles[!]      this repo\'s work files (! every repo)',
-    '  :WorkNew [name]    new <yyyymmdd>-<name> in this worktree\'s folder',
-    '  :WorkDir           make this worktree\'s folder and print it',
     '  :WorkGrep[!]       fzf search the files (! every repo)',
     '',
     'Where',
@@ -306,7 +327,7 @@ local function repo_info(loc)
     if not loc then return nil end
     local info = { worktrees = loc.worktrees, links = {} }
     for name, top in pairs(loc.worktrees) do
-        local dir = linked_dir(top)
+        local dir = linked_dir(top, loc.gitdirs[name])
         if dir then
             info.links[dir] = info.links[dir] or {}
             table.insert(info.links[dir], name)
@@ -383,9 +404,30 @@ function M.close()
     pane.win, pane.buf = nil, nil
 end
 
+-- A work file's path through the link of checkout `loc` (else of another worktree of its repo), so its buffer
+-- belongs to that checkout rather than to the root's repo. Unchanged if no link leads to it.
+local function via_link(path, loc)
+    if not loc or loc.nogit then return path end
+    local tops = { { loc.top, loc.gitdir } }
+    for name, top in pairs(loc.worktrees) do tops[#tops + 1] = { top, loc.gitdirs[name] } end
+    for _, t in ipairs(tops) do
+        local dir, link = linked_dir(t[1], t[2])
+        if dir and inside(path, dir) then return link .. path:sub(#dir + 1) end
+    end
+    return path
+end
+
+-- Buffer of a file, whichever path it was opened by.
+local function buf_of(path)
+    for _, b in ipairs(vim.api.nvim_list_bufs()) do
+        local name = vim.api.nvim_buf_get_name(b)
+        if name ~= '' and vim.fn.resolve(name) == path then return b end
+    end
+end
+
 local function open_file(path, stay)
     local win = target_window()
-    vim.api.nvim_win_call(win, function() vim.cmd('edit ' .. vim.fn.fnameescape(path)) end)
+    vim.api.nvim_win_call(win, function() vim.cmd('edit ' .. vim.fn.fnameescape(via_link(path, pane.loc))) end)
     if stay then return end
     M.close()
     vim.api.nvim_set_current_win(win)
@@ -433,8 +475,8 @@ local function rename()
         if vim.uv.fs_stat(to) then return vim.notify('workfiles: ' .. to .. ' exists', vim.log.levels.WARN) end
         local ok, err = vim.uv.fs_rename(it.path, to)
         if not ok then return vim.notify('workfiles: ' .. err, vim.log.levels.ERROR) end
-        local buf = vim.fn.bufnr(it.path)
-        if buf > 0 then vim.api.nvim_buf_set_name(buf, to) end
+        local buf = buf_of(it.path)
+        if buf then vim.api.nvim_buf_set_name(buf, via_link(to, pane.loc)) end
         render(to)
     end)
 end
@@ -480,7 +522,7 @@ function M.toggle(all)
     pane.repo, pane.loc, pane.here = cur.repo, cur.loc, cur.dir
     if not pane.loc then pane.loc = where(vim.fn.getcwd()) end
     if pane.loc.repo ~= pane.repo then pane.loc = nil end
-    vim.fn.mkdir(root() .. '/' .. pane.repo, 'p')
+    ensure(cur)
     pane.buf = vim.api.nvim_create_buf(false, true)
     vim.bo[pane.buf].bufhidden = 'wipe'
     vim.bo[pane.buf].filetype = 'workfiles'
@@ -500,8 +542,6 @@ function M.toggle(all)
         vim.wo[pane.win][opt] = val
     end
     render(newest(pane.here))
-    -- this worktree has no folder yet: the cursor goes to the repo row
-    if not line_of(pane.here) then vim.api.nvim_win_set_cursor(pane.win, { 1, 0 }) end
 
     local o = { buffer = pane.buf, silent = true, nowait = true }
     vim.keymap.set('n', '<CR>', function()
@@ -544,28 +584,13 @@ end
 -- commands
 ---------------------------------------------------------------------------
 
-function M.new(name)
-    local cur = current()
-    local function go(n)
-        if not n or vim.trim(n) == '' then return end
-        ensure(cur)
-        local path = cur.dir .. '/' .. dated(n)
-        if vim.fn.filereadable(path) == 0 then vim.fn.writefile({}, path) end
-        if pane_open() then
-            render(path)
-            open_file(path)
-        else
-            vim.cmd('edit ' .. vim.fn.fnameescape(path))
-        end
-    end
-    if name and name ~= '' then return go(name) end
-    vim.ui.input({ prompt = 'New work file in ' .. vim.fn.fnamemodify(cur.dir, ':~') .. '/ (<yyyymmdd>- added): ' }, go)
-end
-
-function M.dir()
-    local cur = current()
-    ensure(cur)
-    print(vim.fn.fnamemodify(cur.dir, ':~'))
+-- A work file's path through the link of the cwd's checkout (see via_link), e.g. for a file tree to show it
+-- inside the repo; any other path unchanged.
+function M.link_path(path)
+    local real = vim.fn.resolve(path)
+    if not inside(real, root()) then return path end
+    local linked = via_link(real, where(vim.fn.getcwd()))
+    return linked ~= real and linked or path
 end
 
 function M.grep(query, all)
@@ -597,7 +622,7 @@ vim.api.nvim_create_autocmd('WinClosed', {
 vim.api.nvim_create_autocmd('BufWritePost', {
     group = group,
     callback = function(ev)
-        if pane_open() and inside(vim.api.nvim_buf_get_name(ev.buf), root()) then M.refresh() end
+        if pane_open() and inside(vim.fn.resolve(vim.api.nvim_buf_get_name(ev.buf)), root()) then M.refresh() end
     end,
 })
 
