@@ -1,7 +1,7 @@
 -- Local work files (notes, plans, test scripts, experiments) per worktree, kept out of the repo's git.
 --
 --   :WorkFiles          toggle the panel: this repo's work files as a folded tree, opened at the current worktree
---                       (the one nvim's cwd is in, not the file you're editing), whose folder and tmp link
+--                       (the one nvim's cwd is in, not the file you're editing), whose folder and link
 --                       are made if they don't exist yet
 --   :WorkFiles!         same, for every repo under the root
 --   :WorkGrep [query]   fzf search through this repo's work files (! for every repo)
@@ -10,12 +10,14 @@
 --   root      g:workfiles_root, else $WORK_FILES_ROOT, else ~/workfiles.
 --   repo      folder name of the repo's main checkout (e.g. myapp)
 --   worktree  folder name of the worktree (e.g. myapp-fix-login), 'main' in the main checkout
--- Every checkout links to its folder: tmp/ (made with the folder, and git-excluded through info/exclude), so
--- `tmp/x.md` in any worktree is that worktree's work file. If tmp/ is taken by something else, the link is
--- tmp_workfiles in the checkout's git dir (.git/tmp_workfiles, .git/worktrees/<name>/tmp_workfiles), which git
--- never lists. If a link already points to another folder under the root (e.g. one project folder shared by
--- several worktrees), that one is used. The panel opens files through the link, so their buffers belong to the
--- checkout (a file tree or git-root lookup going by the buffer's path finds the repo, not the root's).
+-- Outside git, every folder shares <root>/misc/ (no link: nothing to keep it out of).
+-- Every checkout links to its folder, git-ignored: tmp/workfiles (with /tmp/workfiles in info/exclude unless git
+-- already ignores it), so `tmp/workfiles/x.md` in any worktree is that worktree's work file. If tmp is a file or a
+-- link to somewhere else, the link is tmp/workfiles in the checkout's git dir (.git/tmp/workfiles,
+-- .git/worktrees/<name>/tmp/workfiles), which git never lists. A tmp that is itself a link to the folder (the older
+-- layout) is used as it is, and so is a link to another folder under the root (e.g. one project folder shared by
+-- several worktrees). The panel opens files through the link, so their buffers belong to the checkout (a file
+-- tree or git-root lookup going by the buffer's path finds the repo, not the root's).
 --
 -- In the panel:
 --   <CR>       open the file (closing the panel) / open or close a folder
@@ -69,7 +71,7 @@ local function where(path)
     local dir = is_dir(path) and path or vim.fn.fnamemodify(path, ':h')
     local git = vim.fn.systemlist({ 'git', '-C', dir, 'rev-parse', '--show-toplevel', '--git-dir', '--git-common-dir' })
     if vim.v.shell_error ~= 0 or #git < 3 then
-        return { repo = vim.fn.fnamemodify(dir, ':t'), name = 'main', top = dir, main = true, worktrees = {}, nogit = true }
+        return { repo = 'misc', top = dir, main = true, worktrees = {}, nogit = true }
     end
     local top = git[1]
     local abs = function(d)
@@ -103,9 +105,15 @@ local function where(path)
     return loc
 end
 
--- Folder a checkout links to, if it's under the root, and the link: tmp/, else tmp_workfiles in its git dir.
+-- Where a checkout's link to its folder can be, in order: tmp/workfiles, tmp itself (older layout), tmp/workfiles
+-- in its git dir.
+local function link_spots(top, gitdir)
+    return { top .. '/tmp/workfiles', top .. '/tmp', gitdir and (gitdir .. '/tmp/workfiles') }
+end
+
+-- Folder a checkout links to, if it's under the root, and the link.
 local function linked_dir(top, gitdir)
-    for _, link in ipairs({ top .. '/tmp', gitdir and (gitdir .. '/tmp_workfiles') }) do
+    for _, link in ipairs(link_spots(top, gitdir)) do
         if vim.uv.fs_readlink(link) then
             local target = vim.fn.resolve(link)
             if inside(target, root()) then return target, link end
@@ -115,6 +123,7 @@ end
 
 -- The work-files folder of a location (it may not exist yet).
 local function folder_of(loc)
+    if loc.nogit then return root() .. '/misc' end
     return linked_dir(loc.top, loc.gitdir) or table.concat({ root(), loc.repo, loc.name }, '/')
 end
 
@@ -133,29 +142,50 @@ local function current()
     return { repo = loc.repo, dir = folder_of(loc), loc = loc }
 end
 
--- Make the folder, and the checkout's link to it: tmp/ with /tmp in the repo's info/exclude, or
--- tmp_workfiles in its git dir if tmp/ is taken (a real folder, or a link to somewhere else).
+local function ignored(top, rel)
+    vim.fn.system({ 'git', '-C', top, 'check-ignore', '-q', '--no-index', rel })
+    return vim.v.shell_error == 0
+end
+
+-- Have git ignore `rel` (a path in the checkout): through the repo's info/exclude, unless .gitignore or the
+-- exclude file already does. False if it still isn't ignored (e.g. a `!` rule in .gitignore).
+local function ignore(top, rel)
+    if ignored(top, rel) then return true end
+    local exclude = vim.fn.system({ 'git', '-C', top, 'rev-parse', '--git-path', 'info/exclude' }):gsub('\n$', '')
+    if not vim.startswith(exclude, '/') then exclude = top .. '/' .. exclude end
+    local lines = vim.fn.filereadable(exclude) == 1 and vim.fn.readfile(exclude) or {}
+    vim.fn.mkdir(vim.fn.fnamemodify(exclude, ':h'), 'p')
+    lines[#lines + 1] = '/' .. rel
+    vim.fn.writefile(lines, exclude)
+    return ignored(top, rel)
+end
+
+-- Make the folder, and the checkout's link to it, git-ignored: tmp/workfiles, or the same in the git dir if tmp
+-- is a file or a link to somewhere else (or the link there can't be ignored). Every checkout gets one.
 local function ensure(cur)
     vim.fn.mkdir(cur.dir, 'p')
     local loc = cur.loc
-    if not loc or loc.nogit or linked_dir(loc.top, loc.gitdir) then return end
-    local tmp = loc.top .. '/tmp'
-    if vim.uv.fs_lstat(tmp) then
-        local alt = loc.gitdir .. '/tmp_workfiles'
-        if vim.uv.fs_lstat(alt) then
-            return vim.notify('workfiles: ' .. alt .. ' is not a link to ' .. cur.dir, vim.log.levels.WARN)
-        end
-        vim.uv.fs_symlink(cur.dir, alt)
+    if not loc or loc.nogit then return end
+    local _, link = linked_dir(loc.top, loc.gitdir)
+    if link then
+        -- a link in the checkout made by hand, or before git ignored it: make sure it's ignored
+        if inside(link, loc.top .. '/tmp') then ignore(loc.top, link:sub(#loc.top + 2)) end
         return
     end
-    vim.uv.fs_symlink(cur.dir, tmp)
-    local exclude = vim.fn.system({ 'git', '-C', loc.top, 'rev-parse', '--git-path', 'info/exclude' }):gsub('\n$', '')
-    if not vim.startswith(exclude, '/') then exclude = loc.top .. '/' .. exclude end
-    local lines = vim.fn.filereadable(exclude) == 1 and vim.fn.readfile(exclude) or {}
-    if not vim.tbl_contains(lines, '/tmp') then
-        vim.fn.mkdir(vim.fn.fnamemodify(exclude, ':h'), 'p')
-        lines[#lines + 1] = '/tmp'
-        vim.fn.writefile(lines, exclude)
+    local tmp = loc.top .. '/tmp'
+    local st = vim.uv.fs_lstat(tmp)
+    if (not st or st.type == 'directory') and not vim.uv.fs_lstat(tmp .. '/workfiles') then
+        vim.fn.mkdir(tmp, 'p')
+        if vim.uv.fs_symlink(cur.dir, tmp .. '/workfiles') then
+            if ignore(loc.top, 'tmp/workfiles') then return end
+            vim.uv.fs_unlink(tmp .. '/workfiles')
+            if not st then vim.uv.fs_rmdir(tmp) end
+        end
+    end
+    local alt = loc.gitdir .. '/tmp/workfiles'
+    vim.fn.mkdir(loc.gitdir .. '/tmp', 'p')
+    if vim.uv.fs_lstat(alt) or not vim.uv.fs_symlink(cur.dir, alt) then
+        vim.notify('workfiles: no link to ' .. cur.dir .. ' could be made in ' .. loc.top, vim.log.levels.WARN)
     end
 end
 
@@ -228,7 +258,7 @@ local HELP = {
     '',
     'Where',
     '  <root>/<repo>/<worktree>/, root = g:workfiles_root,',
-    '  else $WORK_FILES_ROOT, else ~/workfiles. A worktree\'s tmp/ links there.',
+    '  else $WORK_FILES_ROOT, else ~/workfiles. A checkout\'s tmp/workfiles links there.',
 }
 
 local function set_highlights()
@@ -352,7 +382,7 @@ local function render(target)
     if pane.all then
         tree.kids = vim.tbl_filter(function(k) return k.dir end, tree.kids)
     end
-    local lines, marks, items = build(tree, not pane.all and repo_info(pane.loc) or nil)
+    local lines, marks, items = build(tree, not pane.all and not (pane.loc and pane.loc.nogit) and repo_info(pane.loc) or nil)
     pane.items = items
     vim.bo[pane.buf].modifiable = true
     vim.api.nvim_buf_set_lines(pane.buf, 0, -1, false, lines)

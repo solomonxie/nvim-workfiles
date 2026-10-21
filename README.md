@@ -25,10 +25,11 @@ repo, sorted by repo and worktree, so the files outlive the worktree and never s
   next to the notes from every other branch of the same repo.
 - **Nothing to gitignore or forget.** The files live outside the repo, so they never get committed by
   mistake or lost to `git clean`.
-- **Still one keystroke away inside the repo.** Each checkout gets a `tmp/` symlink to its folder
-  (git-excluded through `info/exclude`, not `.gitignore`), so `tmp/plan.md` works from the shell, from
-  scripts and from AI coding agents too. If `tmp/` is already taken, the link is `.git/tmp_workfiles`
-  (`.git/worktrees/<name>/tmp_workfiles` for a linked worktree) instead.
+- **Still one keystroke away inside the repo.** Each checkout gets a `tmp/workfiles` symlink to its folder,
+  so `tmp/workfiles/plan.md` works from the shell, from scripts and from AI coding agents too. It's kept out
+  of git: if `.gitignore` doesn't already ignore it, it goes in the repo's `info/exclude`, never in a tracked
+  file. If `tmp` is a file or a link to somewhere else, the link is `.git/tmp/workfiles`
+  (`.git/worktrees/<name>/tmp/workfiles` for a linked worktree) instead, which git never lists.
 - **Files stay in their project.** The panel opens files through that link, so a file tree or anything
   that looks for the git root from the buffer's path finds your repo, not the root's.
 - **Sorted by recency.** Files get a `<yyyymmdd>-` prefix, and the panel lists newest first.
@@ -37,7 +38,7 @@ repo, sorted by repo and worktree, so the files outlive the worktree and never s
 
 **Browse everything you wrote for this repo.** `:WorkFiles` opens a panel at the bottom with the repo's
 work files as a folded tree, open at the current worktree's folder with the cursor on the newest file.
-In a new worktree it makes that folder (and its `tmp/` link) first, so it's always there to write in.
+In a new worktree it makes that folder (and its link) first, so it's always there to write in.
 Folders of worktrees that have since been deleted are marked `(no worktree)`, so old notes are easy to
 find again or clean up. `:WorkFiles!` shows every repo under the root.
 
@@ -47,10 +48,10 @@ ripgrep, with preview. `:WorkGrep!` searches every repo.
 **Take notes for the branch you're on.** In the panel, `a` on your worktree's folder asks for a name and
 creates `<root>/<repo>/<worktree>/20261019-plan.md`. A name without an extension gets `.md`.
 
-**Give scripts and agents a place to write.** Anything that writes to `tmp/` (a test run's output, a
+**Give scripts and agents a place to write.** Anything that writes to `tmp/workfiles/` (a test run's output, a
 script, an agent's plan) lands in the work-files folder.
 
-**Share one folder across several worktrees.** If a worktree's `tmp/` already points to some other folder
+**Share one folder across several worktrees.** If a worktree's link already points to some other folder
 under the root (say a `myapp/billing-project/` used by three worktrees), that folder is used as the
 worktree's folder, and the panel marks it `(tmp of 3 worktrees)`.
 
@@ -60,7 +61,7 @@ to back up and version your notes separately from the code.
 ## Requirements
 
 - Neovim 0.10+
-- git (outside a repo, the cwd's folder name is used as the repo and `main` as the worktree)
+- git (outside a repo, every folder shares `<root>/misc/`, with no link)
 - Optional: [fzf.vim](https://github.com/junegunn/fzf.vim) and [ripgrep](https://github.com/BurntSushi/ripgrep) for `:WorkGrep`
 - Optional: a `trash` command (built into macOS 15+, or `trash-cli`) for deleting from the panel
 
@@ -105,7 +106,7 @@ nnoremap <Leader>w :WorkFiles<CR>
 
 | Command | What it does |
 |---|---|
-| `:WorkFiles` | Toggle the panel with this repo's work files, opened at the current worktree (whose folder and `tmp/` link it makes if needed) |
+| `:WorkFiles` | Toggle the panel with this repo's work files, opened at the current worktree (whose folder and link it makes if needed) |
 | `:WorkFiles!` | Same, for every repo under the root |
 | `:WorkGrep[!] [query]` | fzf search this repo's work files (`!` every repo) |
 
@@ -132,8 +133,8 @@ file of another repo). A cwd inside the root counts as being in that work-files 
 - **repo**: folder name of the repo's main checkout, so every worktree of a repo files under the same name.
   Repos with a bare or separate git dir (`git --git-dir=~/.dotfiles.git`) use the folder that holds it.
 - **worktree**: folder name of the linked worktree, or `main` for the main checkout.
-- If a checkout already has a `tmp/` that isn't a link to its folder, it's left alone and the link goes in
-  its git dir as `tmp_workfiles`.
+- A `tmp` that is itself a link to the folder (the older layout) is used as it is. Anything else already
+  at `tmp` is left alone.
 
 ## Lua API
 
